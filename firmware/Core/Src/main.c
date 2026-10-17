@@ -26,6 +26,7 @@
 #include <stdlib.h>
 #include "airtune_infer.h"
 #include "ina226.h"
+#include "lora_sx1278.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -62,6 +63,8 @@ typedef struct {
   int shunt_mohm;   /* INA226 采样电阻毫欧值：模块丝印 R010=10 / R100=100 */
 } params_t;
 params_t g_params = {17, 7, 125, 1000, 0.85f, 10};
+
+#define LORA_RX_PRINT_MAX 65   /* lora recv 打印缓冲（64 载荷 + NUL） */
 
 /* CLI 行缓冲（非阻塞轮询用） */
 static char cli_line[64];
@@ -143,6 +146,11 @@ MX_I2C1_Init();     /* I2C1: PB8/PB9 -> INA226 */
     printf("[BOOT] INA226 OK on I2C1 @0x%02X (man=TI die=0x2260)\r\n", ina226_addr());
   else
     printf("[BOOT] INA226 NOT found on I2C1: run 'i2cscan'; check SCL=PB8 SDA=PB9 VCC=3V3\r\n");
+  if (lora_init() == 0x12)
+    printf("[BOOT] LoRa SX1278 OK: ver=0x12 %.1fMHz sf7 bw125 17dBm (type 'lora status')\r\n",
+           lora_info()->freq_mhz);
+  else
+    printf("[BOOT] LoRa SX1278 not found: check SPI1 wiring (PA5/6/7, NSS=PB6, RST=PB5)\r\n");
 /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -404,6 +412,7 @@ void cli_process(char *line)
     printf("  pwrlog <n> <ms>   stream n INA226 CSV samples (Python capture)\r\n");
     printf("  i2cscan           scan I2C1 bus for ACKing devices\r\n");
     printf("  i2cpins           read PB8/PB9 pin level (wiring check, no DMM)\r\n");
+    printf("  lora init|status|send <text>|recv [ms]|freq <mhz>|apply\r\n");
     printf("Params: tx_power sf bw heartbeat_ms threshold shunt_mohm\r\n");
   }
   else if (strcmp(tok, "get") == 0)
@@ -432,12 +441,18 @@ void cli_process(char *line)
     float fv = (float)atof(val);
     if (strcmp(name, "tx_power") == 0) {
       if (iv < 2 || iv > 20) printf("tx_power out of range 2..20\r\n");
-      else { g_params.tx_power = iv; printf("tx_power=%d\r\n", iv); }
+      else { g_params.tx_power = iv;
+             if (lora_is_up()) lora_set_power(iv);
+             printf("tx_power=%d%s\r\n", iv, lora_is_up() ? " (radio applied)" : ""); }
     } else if (strcmp(name, "sf") == 0) {
       if (iv < 7 || iv > 12) printf("sf out of range 7..12\r\n");
-      else { g_params.sf = iv; printf("sf=%d\r\n", iv); }
+      else { g_params.sf = iv;
+             if (lora_is_up()) lora_set_sf(iv);
+             printf("sf=%d%s\r\n", iv, lora_is_up() ? " (radio applied)" : ""); }
     } else if (strcmp(name, "bw") == 0) {
-      g_params.bw = iv; printf("bw=%d\r\n", iv);
+      g_params.bw = iv;
+      if (lora_is_up()) lora_set_bw(iv);
+      printf("bw=%d%s\r\n", iv, lora_is_up() ? " (radio applied)" : "");
     } else if (strcmp(name, "heartbeat_ms") == 0) {
       if (iv < 100) printf("heartbeat_ms min 100\r\n");
       else { g_params.heartbeat_ms = iv; printf("heartbeat_ms=%d\r\n", iv); }
@@ -578,6 +593,67 @@ void cli_process(char *line)
       printf("[I2C] none -> check wiring/power: SDA<->PB9 SCL<->PB8 VCC<->3V3 GND<->GND\r\n");
     else
       printf("[I2C] %d device(s) found\r\n", found);
+  }
+  else if (strcmp(tok, "lora") == 0)
+  {
+    char *sub = strtok(NULL, " ");
+    if (sub == NULL) {
+      printf("usage: lora init|status|send <text>|recv [ms]|freq <mhz>|apply\r\n");
+    } else if (strcmp(sub, "init") == 0) {
+      int v = lora_init();
+      if (v == 0x12)
+        printf("[LORA] SX1278 OK ver=0x12 %.1fMHz sf=%d bw=%d tx=%ddBm\r\n",
+               lora_info()->freq_mhz, lora_info()->sf,
+               lora_info()->bw_khz, lora_info()->tx_dbm);
+      else
+        printf("[LORA] init FAIL: RegVersion=0x%02X (expect 0x12)\r\n", lora_info()->version);
+        printf("[LORA] check: VCC=3V3 GND SCK=PA5 MISO=PA6 MOSI=PA7 NSS=PB6 RST=PB5\r\n");
+    } else if (strcmp(sub, "status") == 0) {
+      const lora_info_t *li = lora_info();
+      printf("[LORA] %s ver=0x%02X freq=%.1fMHz sf=%d bw=%dkHz cr=4/5 tx=%ddBm\r\n",
+             lora_is_up() ? "UP" : "DOWN", li->version, li->freq_mhz,
+             li->sf, li->bw_khz, li->tx_dbm);
+      if (lora_is_up())
+        printf("[LORA] last pkt: RSSI=%d dBm  SNR=%.1f dB\r\n", li->last_rssi, li->last_snr);
+    } else if (strcmp(sub, "send") == 0) {
+      char *txt = sub + strlen(sub) + 1;      /* send 后面的原文 */
+      while (*txt == ' ') txt++;
+      if (*txt == 0) { printf("usage: lora send <text>\r\n"); }
+      else {
+        int len = (int)strlen(txt);
+        int rc = lora_send((const uint8_t *)txt, len);
+        if (rc == 0) printf("[LORA] TX done: %d bytes (RSSI unknown on TX)\r\n", len);
+        else printf("[LORA] TX timeout/fail (radio up? antenna connected?)\r\n");
+      }
+    } else if (strcmp(sub, "recv") == 0) {
+      char *ms = strtok(NULL, " ");
+      int tmo = ms ? atoi(ms) : 2000;
+      uint8_t buf[LORA_RX_PRINT_MAX];
+      int rssi = 0; float snr = 0.0f;
+      int n = lora_recv(buf, LORA_RX_PRINT_MAX - 1, tmo, &rssi, &snr);
+      if (n > 0) {
+        buf[n] = 0;
+        printf("[LORA] RX %d bytes: %s  (RSSI=%d dBm SNR=%.1f dB)\r\n", n, buf, rssi, snr);
+      } else if (n == -2) {
+        printf("[LORA] RX CRC error\r\n");
+      } else {
+        printf("[LORA] RX timeout (%d ms)\r\n", tmo);
+      }
+    } else if (strcmp(sub, "freq") == 0) {
+      char *m = strtok(NULL, " ");
+      float f = m ? (float)atof(m) : 0.0f;
+      if (f < 137.0f || f > 1020.0f) printf("freq out of range 137..1020 MHz\r\n");
+      else { lora_set_freq(f); printf("[LORA] freq=%.1f MHz (both ends must match)\r\n", f); }
+    } else if (strcmp(sub, "apply") == 0) {
+      if (!lora_is_up()) { printf("[LORA] radio down, run lora init first\r\n"); }
+      else {
+        lora_apply_params(g_params.sf, g_params.bw, g_params.tx_power);
+        printf("[LORA] applied AirTune params: sf=%d bw=%d tx=%ddBm\r\n",
+               g_params.sf, g_params.bw, g_params.tx_power);
+      }
+    } else {
+      printf("unknown lora subcmd: %s\r\n", sub);
+    }
   }
   else if (strcmp(tok, "i2cpins") == 0)
   {

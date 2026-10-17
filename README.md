@@ -26,11 +26,13 @@
 │   ├── Core/
 │   │   ├── Inc/
 │   │   │   ├── airtune_model.h  # 自动导出的 int8 权重（const → Flash）
-│   │   │   └── ina226.h
+│   │   │   ├── ina226.h
+│   │   │   └── lora_sx1278.h     # LoRa 电台驱动接口
 │   │   └── Src/
-│   │       ├── main.c           # 串口 CLI + DWT + 功率监测 + 采集流
+│   │       ├── main.c           # 串口 CLI + DWT + 功率监测 + LoRa + 采集流
 │   │       ├── airtune_infer.c  # 纯 C 定点 MLP 推理（int8×int8→int32→定点乘子）
-│   │       └── ina226.c         # INA226 I2C 驱动（地址自动探测 + 总线恢复重试）
+│   │       ├── ina226.c         # INA226 I2C 驱动（地址自动探测 + 总线恢复重试）
+│   │       └── lora_sx1278.c    # SX1278 驱动（SPI 寄存器/收发/SF-BW-功率配置）
 │   ├── Drivers/                 # STM32 HAL + CMSIS（已裁剪到 F411 必需集）
 │   └── MDK-ARM/                 # Keil 工程 + startup
 └── pc/                          # PC 侧：训练 / 量化 / 导出 / 采集
@@ -60,7 +62,7 @@
 1. Keil 打开 `firmware/MDK-ARM/Demo.uvprojx`
 2. **Options → Target → 勾选 Use MicroLIB**（printf 重定向必需）
 3. Rebuild（F7）→ 烧录 → 串口 **COM4 @115200 8N1**
-4. 开机自检通过会打印 `[BOOT] INA226 OK on I2C1 @0x40 (man=TI die=0x2260)`
+4. 开机自检通过会打印 `[BOOT] INA226 OK on I2C1 @0x40 (man=TI die=0x2260)` 和 `[BOOT] LoRa SX1278 OK: ver=0x12`
 
 ### PC 侧
 
@@ -96,8 +98,22 @@ gcc test_infer_pc.c -I ../firmware/Core/Inc -O2 -o test_infer_pc && ./test_infer
 | `log <n> <ms>` | 流式推理遥测（CSV，配 capture.py 出图） |
 | `power` / `pwrlog <n> <ms>` | INA226 电压/电流/功率（单次/流式） |
 | `i2cscan` / `i2cpins` | I2C 总线扫描 / 线路电平诊断 |
+| `lora init\|status\|send <text>\|recv [ms]\|freq <mhz>\|apply` | LoRa 电台：初始化/状态/收发/频率/应用 AirTune 参数 |
 
 > CLI 带**空闲 1.5s 自动执行**，串口工具不配换行符也能用。
+
+### LoRa 通联（AirTune 闭环）
+
+```bash
+lora init            # 复位+初始化，读 RegVersion，SX1278 应返回 0x12（验证 SPI 接线，不需天线）
+set sf 12            # 改参数 → 电台实时跟随（打印 "radio applied"）
+lora apply           # 一键把 AirTune 选出的 sf/bw/tx_power 灌给电台
+lora send hello      # 发包（≤64 字节）
+lora recv 3000       # 收包，打印内容 + RSSI + SNR
+```
+
+> ⚠️ **TX 前必须接天线**（IPEX 座直接插，或焊 17cm 线 @433MHz），没天线满功率发射会烧 PA。
+> DIO0 不用接——驱动轮询 IrqFlags 判收发完成。
 
 ## 踩坑记录（面试可讲）
 

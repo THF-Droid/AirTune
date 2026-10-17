@@ -150,7 +150,8 @@ MX_I2C1_Init();     /* I2C1: PB8/PB9 -> INA226 */
     printf("[BOOT] LoRa SX1278 OK: ver=0x12 %.1fMHz sf7 bw125 17dBm (type 'lora status')\r\n",
            lora_info()->freq_mhz);
   else
-    printf("[BOOT] LoRa SX1278 not found: check SPI1 wiring (PA5/6/7, NSS=PB6, RST=PB5)\r\n");
+    printf("[BOOT] LoRa SX1278 not found: RegVersion=0x%02X (expect 0x12) check SPI1 wiring (PA5/6/7, NSS=PB6, RST=PB5)\r\n",
+           lora_info()->version);
 /* USER CODE END 2 */
 
   /* Infinite loop */

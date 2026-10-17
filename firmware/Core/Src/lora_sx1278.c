@@ -5,6 +5,7 @@
  * ========================================================================= */
 #include "main.h"
 #include "lora_sx1278.h"
+#include <stdio.h>   /* snprintf/printf: lora_dump_regs */
 
 extern SPI_HandleTypeDef hspi1;
 
@@ -67,6 +68,17 @@ extern SPI_HandleTypeDef hspi1;
 static lora_info_t s_info;
 static int s_up = 0;
 
+/* 清掉上一笔事务的残留：HAL_SPI_Transmit 是纯发送，不回读 DR，
+ * 于是 RXNE 里留着地址阶段的脏字节；下一笔读事务会整体错位一个字节
+ * （rx[0]=残留, rx[1]=脏字节, 真数据被丢下）-> 读到'稳定但错误'的值。
+ * OVR 不清也会一直挂着。每笔事务前清一次。 */
+static void spi_flush(void)
+{
+  if (__HAL_SPI_GET_FLAG(&hspi1, SPI_FLAG_RXNE) != RESET)
+    (void)hspi1.Instance->DR;
+  __HAL_SPI_CLEAR_OVRFLAG(&hspi1);
+}
+
 /* ---- SPI 寄存器访问 ---- */
 static uint8_t rd(uint8_t a)
 {
@@ -74,6 +86,7 @@ static uint8_t rd(uint8_t a)
      「地址阶段」收到的脏字节当数据返回（RXNE 已被第一次置位）。 */
   uint8_t tx[2] = { (uint8_t)(a & 0x7Fu), 0x00u };
   uint8_t rx[2] = { 0x00u, 0x00u };
+  spi_flush();
   NSS_LOW();
   HAL_SPI_TransmitReceive(&hspi1, tx, rx, 2, SPI_TMO);
   NSS_HIGH();
@@ -83,6 +96,7 @@ static uint8_t rd(uint8_t a)
 static void wr(uint8_t a, uint8_t v)
 {
   uint8_t b[2] = { (uint8_t)(a | 0x80u), v };
+  spi_flush();
   NSS_LOW();
   HAL_SPI_Transmit(&hspi1, b, 2, SPI_TMO);
   NSS_HIGH();
@@ -93,6 +107,7 @@ static void wr_fifo(const uint8_t *d, int n)
   uint8_t b[LORA_MAX_PAYLOAD + 1];
   b[0] = REG_FIFO | 0x80u;
   for (int i = 0; i < n; i++) b[i + 1] = d[i];
+  spi_flush();
   NSS_LOW();
   HAL_SPI_Transmit(&hspi1, b, (uint16_t)(n + 1), SPI_TMO);
   NSS_HIGH();
@@ -105,6 +120,7 @@ static void rd_fifo(uint8_t *d, int n)
   uint8_t rx[LORA_MAX_PAYLOAD + 1];
   tx[0] = REG_FIFO & 0x7Fu;
   for (int i = 1; i <= n; i++) tx[i] = 0x00u;
+  spi_flush();
   NSS_LOW();
   HAL_SPI_TransmitReceive(&hspi1, tx, rx, (uint16_t)(n + 1), SPI_TMO);
   NSS_HIGH();
@@ -174,6 +190,22 @@ void lora_apply_params(int sf, int bw_khz, int tx_dbm)
 }
 
 int lora_is_up(void) { return s_up; }
+
+/* 裸读一个寄存器（诊断用） */
+uint8_t lora_read_reg(uint8_t addr) { return rd(addr); }
+
+/* 寄存器堆转储（诊断用）：8 个一行，地址=值 对 */
+void lora_dump_regs(uint8_t start, uint8_t end)
+{
+  char line[80];
+  for (uint8_t base = start; base <= end; base += 8) {
+    int n = snprintf(line, sizeof(line), "[LORA] %02X:", base);
+    for (int i = 0; i < 8 && (int)(base + i) <= (int)end; i++)
+      n += snprintf(line + n, (size_t)(sizeof(line) - (size_t)n), " %02X=%02X",
+                    (int)(base + i), rd((uint8_t)(base + i)));
+    printf("%s\r\n", line);
+  }
+}
 const lora_info_t *lora_info(void) { return &s_info; }
 
 /* ---- 初始化 ---- */

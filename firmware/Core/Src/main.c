@@ -413,7 +413,7 @@ void cli_process(char *line)
     printf("  pwrlog <n> <ms>   stream n INA226 CSV samples (Python capture)\r\n");
     printf("  i2cscan           scan I2C1 bus for ACKing devices\r\n");
     printf("  i2cpins           read PB8/PB9 pin level (wiring check, no DMM)\r\n");
-    printf("  lora init|status|send <text>|recv [ms]|freq <mhz>|apply\r\n");
+    printf("  lora init|status|send <text>|recv [ms]|freq <mhz>|apply|regs [s e]\r\n");
     printf("Params: tx_power sf bw heartbeat_ms threshold shunt_mohm\r\n");
   }
   else if (strcmp(tok, "get") == 0)
@@ -599,16 +599,17 @@ void cli_process(char *line)
   {
     char *sub = strtok(NULL, " ");
     if (sub == NULL) {
-      printf("usage: lora init|status|send <text>|recv [ms]|freq <mhz>|apply\r\n");
+      printf("usage: lora init|status|send <text>|recv [ms]|freq <mhz>|apply|regs [s e]\r\n");
     } else if (strcmp(sub, "init") == 0) {
       int v = lora_init();
       if (v == 0x12)
         printf("[LORA] SX1278 OK ver=0x12 %.1fMHz sf=%d bw=%d tx=%ddBm\r\n",
                lora_info()->freq_mhz, lora_info()->sf,
                lora_info()->bw_khz, lora_info()->tx_dbm);
-      else
+      else {
         printf("[LORA] init FAIL: RegVersion=0x%02X (expect 0x12)\r\n", lora_info()->version);
         printf("[LORA] check: VCC=3V3 GND SCK=PA5 MISO=PA6 MOSI=PA7 NSS=PB6 RST=PB5\r\n");
+      }
     } else if (strcmp(sub, "status") == 0) {
       const lora_info_t *li = lora_info();
       printf("[LORA] %s ver=0x%02X freq=%.1fMHz sf=%d bw=%dkHz cr=4/5 tx=%ddBm\r\n",
@@ -645,6 +646,20 @@ void cli_process(char *line)
       float f = m ? (float)atof(m) : 0.0f;
       if (f < 137.0f || f > 1020.0f) printf("freq out of range 137..1020 MHz\r\n");
       else { lora_set_freq(f); printf("[LORA] freq=%.1f MHz (both ends must match)\r\n", f); }
+    } else if (strcmp(sub, "regs") == 0) {
+      int a = 0x01, b = 0x2F;
+      char *p1 = strtok(NULL, " ");
+      char *p2 = strtok(NULL, " ");
+      if (p1) a = (int)strtol(p1, NULL, 0);
+      if (p2) b = (int)strtol(p2, NULL, 0);
+      if (a < 0x00) a = 0x00;
+      if (a > 0x6F) a = 0x6F;
+      if (b < a)    b = a;
+      if (b > 0x6F) b = 0x6F;
+      lora_dump_regs((uint8_t)a, (uint8_t)b);
+      printf("[LORA] ver x5: %02X %02X %02X %02X %02X (expect 12)\r\n",
+             lora_read_reg(0x42), lora_read_reg(0x42), lora_read_reg(0x42),
+             lora_read_reg(0x42), lora_read_reg(0x42));
     } else if (strcmp(sub, "apply") == 0) {
       if (!lora_is_up()) { printf("[LORA] radio down, run lora init first\r\n"); }
       else {

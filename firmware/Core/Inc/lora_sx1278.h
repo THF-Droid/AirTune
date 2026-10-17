@@ -29,5 +29,7 @@ int      lora_send(const uint8_t *data, int len);      /* 阻塞发送，0=成�
 int      lora_recv(uint8_t *buf, int buflen, int timeout_ms,
                    int *rssi, float *snr);             /* 返回字节数；-1 超时，-2 CRC 错 */
 const lora_info_t *lora_info(void);
+uint8_t  lora_read_reg(uint8_t addr);                  /* 裸读寄存器（诊断） */
+void     lora_dump_regs(uint8_t start, uint8_t end);   /* 寄存器堆转储（诊断） */
 
 #endif /* LORA_SX1278_H */

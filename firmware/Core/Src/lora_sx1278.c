@@ -70,12 +70,14 @@ static int s_up = 0;
 /* ---- SPI 寄存器访问 ---- */
 static uint8_t rd(uint8_t a)
 {
-  uint8_t tx = a & 0x7Fu, rx = 0;
+  /* 必须单次 TransmitReceive：分两次调（先 Transmit 再 Receive）会把
+     「地址阶段」收到的脏字节当数据返回（RXNE 已被第一次置位）。 */
+  uint8_t tx[2] = { (uint8_t)(a & 0x7Fu), 0x00u };
+  uint8_t rx[2] = { 0x00u, 0x00u };
   NSS_LOW();
-  if (HAL_SPI_Transmit(&hspi1, &tx, 1, SPI_TMO) != HAL_OK) { NSS_HIGH(); return 0; }
-  if (HAL_SPI_Receive(&hspi1, &rx, 1, SPI_TMO) != HAL_OK) { NSS_HIGH(); return 0; }
+  HAL_SPI_TransmitReceive(&hspi1, tx, rx, 2, SPI_TMO);
   NSS_HIGH();
-  return rx;
+  return rx[1];
 }
 
 static void wr(uint8_t a, uint8_t v)
@@ -98,11 +100,15 @@ static void wr_fifo(const uint8_t *d, int n)
 
 static void rd_fifo(uint8_t *d, int n)
 {
-  uint8_t a = REG_FIFO & 0x7Fu;
+  /* 同上：地址 + n 个填充字节一次发完，数据从 rx[1..n] 取 */
+  uint8_t tx[LORA_MAX_PAYLOAD + 1];
+  uint8_t rx[LORA_MAX_PAYLOAD + 1];
+  tx[0] = REG_FIFO & 0x7Fu;
+  for (int i = 1; i <= n; i++) tx[i] = 0x00u;
   NSS_LOW();
-  HAL_SPI_Transmit(&hspi1, &a, 1, SPI_TMO);
-  HAL_SPI_Receive(&hspi1, d, (uint16_t)n, SPI_TMO);
+  HAL_SPI_TransmitReceive(&hspi1, tx, rx, (uint16_t)(n + 1), SPI_TMO);
   NSS_HIGH();
+  for (int i = 0; i < n; i++) d[i] = rx[i + 1];
 }
 
 static void set_mode(uint8_t m) { wr(REG_OPMODE, (uint8_t)(0x80u | (m & 0x07u))); }

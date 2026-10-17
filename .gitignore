@@ -1,0 +1,36 @@
+# ---- 构建产物 ----
+*.axf
+*.hex
+*.bin
+*.map
+*.lst
+*.o
+*.d
+*.crf
+*.dep
+*.lnp
+*.sct
+*.build_log.htm
+MDK-ARM/Demo/
+MDK-ARM/RTE/
+*.uvguix.*
+*.uvoptx
+
+# ---- 生成的数据/图 ----
+pc/test_vectors.h
+pc/__pycache__/
+pc/*.exe
+pc/capture_*.csv
+!pc/results/*.csv
+
+# ---- 环境 ----
+.venv/
+venv/
+__pycache__/
+.idea/
+.vscode/
+
+# ---- 备份/临时 ----
+*.bak
+*.bak-*
+*~
